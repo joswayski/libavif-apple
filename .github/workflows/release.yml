@@ -1,0 +1,94 @@
+name: Release
+
+# Builds libavif.xcframework on every push to main and publishes it as a
+# GitHub release named after the pinned versions and RELEASE_REVISION in
+# build.sh. A release that already exists is never replaced: consumers pin its
+# SHA-256, so publishing a different build means bumping RELEASE_REVISION.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release name
+        id: name
+        run: |
+          avif="$(sed -n 's/^AVIF_VERSION=//p' build.sh)"
+          aom="$(sed -n 's/^AOM_VERSION=//p' build.sh)"
+          revision="$(sed -n 's/^RELEASE_REVISION=//p' build.sh)"
+          test -n "$avif" && test -n "$aom" && test -n "$revision"
+          echo "tag=libavif-$avif-aom-$aom-r$revision" >> "$GITHUB_OUTPUT"
+      - name: Skip if already released
+        id: existing
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.name.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install build tools
+        if: steps.existing.outputs.exists != 'true'
+        # nasm gives the x86_64 slices aom's SSE/AVX code.
+        run: brew install nasm ninja
+      - name: Build
+        if: steps.existing.outputs.exists != 'true'
+        run: ./build.sh
+      - name: Smoke-test every slice
+        if: steps.existing.outputs.exists != 'true'
+        run: |
+          set -euo pipefail
+          xc=dist/libavif.xcframework
+          find "$xc" -maxdepth 2 | sort
+          headers="$(find "$xc" -path '*/Headers/libavif' -type d | head -1)"
+          slice() { find "$xc" -name libavif.a -path "*$1*" | head -1; }
+          macos="$(slice macos-arm64_x86_64)"; ios="$(slice ios-arm64/)"; sim="$(slice ios-arm64_x86_64-simulator)"
+          test -f "$macos" && test -f "$ios" && test -f "$sim"
+          lipo -archs "$macos"; lipo -archs "$ios"; lipo -archs "$sim"
+          for arch in arm64 x86_64; do
+            xcrun clang -arch "$arch" -mmacosx-version-min=14.0 -I"$headers" test/smoke.c "$macos" -o "smoke-$arch"
+          done
+          ./smoke-arm64
+          arch -x86_64 ./smoke-x86_64
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -I"$headers" test/smoke.c "$ios" -o smoke-ios
+          for arch in arm64 x86_64; do
+            xcrun --sdk iphonesimulator clang -target "$arch-apple-ios17.0-simulator" -I"$headers" test/smoke.c "$sim" -o "smoke-sim-$arch"
+          done
+          # The module map must let Swift import the library.
+          printf 'import libavif\nprint(String(cString: avifVersion()))\n' > smoke.swift
+          xcrun swiftc -I"$headers" smoke.swift "$macos" -o smoke-swift
+          ./smoke-swift
+      - name: Package
+        if: steps.existing.outputs.exists != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p package
+          cp -R dist/libavif.xcframework package/
+          cp licenses/* package/
+          (cd package && ditto -c -k --keepParent libavif.xcframework ../libavif.xcframework.zip && zip -q ../libavif.xcframework.zip *.txt)
+          shasum -a 256 libavif.xcframework.zip | tee libavif.xcframework.zip.sha256
+          ls -l libavif.xcframework.zip
+      - uses: actions/upload-artifact@v4
+        if: steps.existing.outputs.exists != 'true'
+        with:
+          name: ${{ steps.name.outputs.tag }}
+          path: |
+            libavif.xcframework.zip
+            libavif.xcframework.zip.sha256
+      - name: Publish release
+        if: github.event_name == 'push' && steps.existing.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.name.outputs.tag }}"
+          gh release create "$tag" libavif.xcframework.zip libavif.xcframework.zip.sha256 \
+            --target "$GITHUB_SHA" --title "$tag" \
+            --notes "libavif and aom encoder XCFramework (macOS arm64/x86_64 14.0, iOS arm64 17.0, simulator arm64/x86_64 17.0). SHA-256: $(cut -d ' ' -f 1 libavif.xcframework.zip.sha256)"
