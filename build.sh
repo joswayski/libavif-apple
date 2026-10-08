@@ -20,7 +20,7 @@ AOM_SHA=8ca0c52746174603500f0adb6f2a215d69c9ca2aab2acb3caa06fb791d8d01bf
 MACOS_MIN=14.0
 IOS_MIN=17.0
 # Bump to publish a new build of the same versions (flags or script changes).
-RELEASE_REVISION=1
+RELEASE_REVISION=2
 
 OUT="$ROOT/dist"
 XCFRAMEWORK="$OUT/libavif.xcframework"
