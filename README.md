@@ -2,8 +2,9 @@
 
 A static `libavif.xcframework` with the [libavif](https://github.com/AOMediaCodec/libavif)
 AVIF encoder and [aom](https://aomedia.googlesource.com/aom/)'s AV1 encoder,
-for macOS and iOS apps that need to write AVIF images. Built for
-[Caper](https://github.com/joswayski/caper)'s photo attachments.
+for macOS and iOS apps that need to write AVIF images. Built for photo
+attachments in [Caper](https://caper.chat), a place for your people to chat
+about anything ([source](https://github.com/joswayski/caper)).
 
 | | |
 | --- | --- |
